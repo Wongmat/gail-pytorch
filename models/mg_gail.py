@@ -1,8 +1,8 @@
 import numpy as np
 import torch
-
+import torch.nn as nn
 from torch.nn import Module
-
+from mg_a2c.utils import get_obss_preprocessor, get_vocab
 from models.nets import PolicyNetwork, ValueNetwork, Discriminator
 from utils.funcs import get_flat_grads, get_flat_params, set_params, \
     conjugate_gradient, rescale_and_linesearch
@@ -16,26 +16,44 @@ else:
 
 class GAIL(Module):
     def __init__(self,
-                 state_dim,
-                 action_dim,
+                 obs_space,
+                 action_space,
+                 model_dir,
                  discrete,
                  train_config=None) -> None:
         super().__init__()
 
-        self.state_dim = state_dim
-        self.action_dim = action_dim
+        obs_space, self.preprocess_obss = get_obss_preprocessor(obs_space)
+        n = obs_space["image"][0]
+        m = obs_space["image"][1]
+        self.image_embedding_size = ((n - 1) // 2 - 2) * (
+            (m - 1) // 2 - 2) * 64
+        self.state_dim = self.image_embedding_size
+        self.action_dim = action_space.n
         self.discrete = discrete
         self.train_config = train_config
+        self.image_conv = nn.Sequential(nn.Conv2d(3, 16, (2, 2)), nn.ReLU(),
+                                        nn.MaxPool2d((2, 2)),
+                                        nn.Conv2d(16, 32, (2, 2)), nn.ReLU(),
+                                        nn.Conv2d(32, 64, (2, 2)), nn.ReLU())
 
         self.pi = PolicyNetwork(self.state_dim, self.action_dim, self.discrete)
         self.v = ValueNetwork(self.state_dim)
 
         self.d = Discriminator(self.state_dim, self.action_dim, self.discrete)
 
+        if hasattr(self.preprocess_obss, "vocab"):
+            self.preprocess_obss.vocab.load_vocab(get_vocab(model_dir))
+
     def get_networks(self):
         return [self.pi, self.v]
 
     def act(self, state):
+        preprocessed_state = self.preprocess_obss(state)
+        x = preprocessed_state.image.transpose(1, 3).transpose(2, 3)
+        x = self.image_conv(preprocessed_state)
+        state = x.reshape(x.shape[0], -1)
+
         self.pi.eval()
 
         state = FloatTensor(state)
@@ -98,13 +116,15 @@ class GAIL(Module):
             if done:
                 exp_rwd_iter.append(np.sum(ep_rwds))
 
-            ep_obs = FloatTensor(np.array(ep_obs))
+            #ep_obs = FloatTensor(np.array(ep_obs))
+            ep_obs = np.array(ep_obs)
             ep_rwds = FloatTensor(ep_rwds)
 
         exp_rwd_mean = np.mean(exp_rwd_iter)
         print("Expert Reward Mean: {}".format(exp_rwd_mean))
 
-        exp_obs = FloatTensor(np.array(exp_obs))
+        #exp_obs = FloatTensor(np.array(exp_obs))
+        exp_obs = np.array(exp_obs)
         exp_acts = FloatTensor(np.array(exp_acts))
 
         rwd_iter_means = []
@@ -160,7 +180,8 @@ class GAIL(Module):
                 if done:
                     rwd_iter.append(np.sum(ep_rwds))
 
-                ep_obs = FloatTensor(np.array(ep_obs))
+                # ep_obs = FloatTensor(np.array(ep_obs))
+                ep_obs = np.array(ep_obs)
                 ep_acts = FloatTensor(np.array(ep_acts))
                 ep_rwds = FloatTensor(ep_rwds)
                 # ep_disc_rwds = FloatTensor(ep_disc_rwds)

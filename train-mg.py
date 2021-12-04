@@ -5,9 +5,10 @@ import argparse
 
 import torch
 import gym
+import gym_minigrid
 
-from models.nets import Expert
-from models.gail import GAIL
+from models.mg_expert import MiniGridExpert
+from models.mg_gail import GAIL
 
 
 def main(env_name, visualize):
@@ -15,10 +16,7 @@ def main(env_name, visualize):
     if not os.path.isdir(ckpt_path):
         os.mkdir(ckpt_path)
 
-    if env_name not in [
-            "MiniGrid-DoorKey-5x5-v0", "CartPole-v1", "Pendulum-v0",
-            "BipedalWalker-v3"
-    ]:
+    if env_name not in ["MiniGrid-DoorKey-5x5-v0"]:
         print("The environment name is wrong!")
         return
 
@@ -41,8 +39,9 @@ def main(env_name, visualize):
     env = gym.make(env_name)
     env.reset()
 
-    state_dim = len(env.observation_space.high)
-    if env_name in ["CartPole-v1"]:
+    #state_dim = len(env.observation_space.high)
+    state_dim = 100
+    if env_name in ["MiniGrid-DoorKey-5x5-v0"]:
         discrete = True
         action_dim = env.action_space.n
     else:
@@ -54,13 +53,9 @@ def main(env_name, visualize):
     else:
         device = "cpu"
 
-    expert = Expert(state_dim, action_dim, discrete,
-                    **expert_config).to(device)
-    expert.pi.load_state_dict(
-        torch.load(os.path.join(expert_ckpt_path, "policy.ckpt"),
-                   map_location=device))
-
-    model = GAIL(state_dim, action_dim, discrete, config).to(device)
+    expert = MiniGridExpert(env, env_name, **expert_config).to(device)
+    model = GAIL(env.observation_space, env.action_space, env_name, discrete,
+                 config).to(device)
 
     results = model.train(env, expert, render=visualize)
 
