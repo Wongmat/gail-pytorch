@@ -48,12 +48,17 @@ class GAIL(Module):
     def get_networks(self):
         return [self.pi, self.v]
 
-    def act(self, state):
+    def embed(self, state):
         preprocessed_state = self.preprocess_obss(state)
         x = preprocessed_state.image.transpose(1, 3).transpose(2, 3)
-        x = self.image_conv(preprocessed_state)
+        x = self.image_conv(x)
         state = x.reshape(x.shape[0], -1)
+        return state
 
+    def act(self, state):
+        if type(state) is not list:
+            state = [state]
+        state = self.embed(state)
         self.pi.eval()
 
         state = FloatTensor(state)
@@ -94,13 +99,14 @@ class GAIL(Module):
 
             while not done and steps < num_steps_per_iter:
                 act = expert.act(ob)
-
-                ep_obs.append(ob)
-                exp_obs.append(ob)
+                with torch.no_grad():
+                    emb_ob = np.array(self.embed([ob])[0], dtype=np.float)
+                ep_obs.append(emb_ob)
+                exp_obs.append(emb_ob)
                 exp_acts.append(act)
 
-                if render:
-                    env.render()
+                # if render:
+                #     env.render()
                 ob, rwd, done, info = env.step(act)
 
                 ep_rwds.append(rwd)
@@ -116,15 +122,15 @@ class GAIL(Module):
             if done:
                 exp_rwd_iter.append(np.sum(ep_rwds))
 
-            #ep_obs = FloatTensor(np.array(ep_obs))
-            ep_obs = np.array(ep_obs)
+            ep_obs = FloatTensor(np.array(ep_obs))
+            #ep_obs = np.array(ep_obs)
             ep_rwds = FloatTensor(ep_rwds)
 
         exp_rwd_mean = np.mean(exp_rwd_iter)
         print("Expert Reward Mean: {}".format(exp_rwd_mean))
 
-        #exp_obs = FloatTensor(np.array(exp_obs))
-        exp_obs = np.array(exp_obs)
+        exp_obs = FloatTensor(np.array(exp_obs))
+        # exp_obs = np.array(exp_obs)
         exp_acts = FloatTensor(np.array(exp_acts))
 
         rwd_iter_means = []
@@ -153,10 +159,12 @@ class GAIL(Module):
                 ob = env.reset()
 
                 while not done and steps < num_steps_per_iter:
-                    act = self.act(ob)
+                    act = self.act([ob])[0]
 
-                    ep_obs.append(ob)
-                    obs.append(ob)
+                    with torch.no_grad():
+                        emb_ob = np.array(self.embed([ob])[0], dtype=np.float)
+                    ep_obs.append(emb_ob)
+                    obs.append(emb_ob)
 
                     ep_acts.append(act)
                     acts.append(act)
@@ -180,8 +188,7 @@ class GAIL(Module):
                 if done:
                     rwd_iter.append(np.sum(ep_rwds))
 
-                # ep_obs = FloatTensor(np.array(ep_obs))
-                ep_obs = np.array(ep_obs)
+                ep_obs = FloatTensor(np.array(ep_obs))
                 ep_acts = FloatTensor(np.array(ep_acts))
                 ep_rwds = FloatTensor(ep_rwds)
                 # ep_disc_rwds = FloatTensor(ep_disc_rwds)

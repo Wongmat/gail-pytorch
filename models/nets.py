@@ -39,7 +39,7 @@ class PolicyNetwork(Module):
             mean = self.net(states)
 
             std = torch.exp(self.log_std)
-            cov_mtx = torch.eye(self.action_dim) * (std ** 2)
+            cov_mtx = torch.eye(self.action_dim) * (std**2)
 
             distb = MultivariateNormal(mean, cov_mtx)
 
@@ -73,9 +73,7 @@ class Discriminator(Module):
         self.discrete = discrete
 
         if self.discrete:
-            self.act_emb = Embedding(
-                action_dim, state_dim
-            )
+            self.act_emb = Embedding(action_dim, state_dim)
             self.net_in_dim = 2 * state_dim
         else:
             self.net_in_dim = state_dim + action_dim
@@ -97,19 +95,19 @@ class Discriminator(Module):
         if self.discrete:
             actions = self.act_emb(actions.long())
 
+        if len(actions.shape) == 3:
+            actions = actions.squeeze(1)
         sa = torch.cat([states, actions], dim=-1)
 
         return self.net(sa)
 
 
 class Expert(Module):
-    def __init__(
-        self,
-        state_dim,
-        action_dim,
-        discrete,
-        train_config=None
-    ) -> None:
+    def __init__(self,
+                 state_dim,
+                 action_dim,
+                 discrete,
+                 train_config=None) -> None:
         super().__init__()
 
         self.state_dim = state_dim

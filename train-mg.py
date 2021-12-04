@@ -39,14 +39,10 @@ def main(env_name, visualize):
     env = gym.make(env_name)
     env.reset()
 
-    #state_dim = len(env.observation_space.high)
-    state_dim = 100
     if env_name in ["MiniGrid-DoorKey-5x5-v0"]:
         discrete = True
-        action_dim = env.action_space.n
     else:
         discrete = False
-        action_dim = env.action_space.shape[0]
 
     if torch.cuda.is_available():
         device = "cuda"
