@@ -10,12 +10,16 @@ from models.nets import Expert
 from models.gail import GAIL
 
 
-def main(env_name, visualize):
+def main(args):
+    env_name = args.env_name
+    expert = args.expert
     ckpt_path = "ckpts"
     if not os.path.isdir(ckpt_path):
         os.mkdir(ckpt_path)
 
-    if env_name not in ["CartPole-v1", "Pendulum-v0", "BipedalWalker-v3"]:
+    if env_name not in [
+            "MountainCar-v0", "CartPole-v1", "Pendulum-v0", "BipedalWalker-v3"
+    ]:
         print("The environment name is wrong!")
         return
 
@@ -36,7 +40,7 @@ def main(env_name, visualize):
         json.dump(config, f, indent=4)
 
     env = gym.make(env_name)
-    env.reset()
+    obs = env.reset()
 
     state_dim = len(env.observation_space.high)
     if env_name in ["CartPole-v1"]:
@@ -51,29 +55,27 @@ def main(env_name, visualize):
     else:
         device = "cpu"
 
-    expert = Expert(state_dim, action_dim, discrete,
-                    **expert_config).to(device)
-    expert.pi.load_state_dict(
-        torch.load(os.path.join(expert_ckpt_path, "policy.ckpt"),
-                   map_location=device))
+    if expert:
+        actor = Expert(state_dim, action_dim, discrete,
+                       **expert_config).to(device)
+        actor.pi.load_state_dict(
+            torch.load(os.path.join(expert_ckpt_path, "policy.ckpt"),
+                       map_location=device))
+        print('Expert agent loaded')
 
-    model = GAIL(state_dim, action_dim, discrete, config).to(device)
+    else:
+        actor = GAIL(state_dim, action_dim, discrete, config).to(device)
+        actor.pi.load_state_dict(
+            torch.load(os.path.join(ckpt_path, "policy.ckpt"),
+                       map_location=device))
+        print('Trained agent loaded')
 
-    results = model.train(env, expert, render=visualize)
+    for _ in range(1000):
+        env.render()
+        action = actor.act(obs)
+        obs, _, _, _ = env.step(action)
 
     env.close()
-
-    with open(os.path.join(ckpt_path, "results.pkl"), "wb") as f:
-        pickle.dump(results, f)
-
-    if hasattr(model, "pi"):
-        torch.save(model.pi.state_dict(), os.path.join(ckpt_path,
-                                                       "policy.ckpt"))
-    if hasattr(model, "v"):
-        torch.save(model.v.state_dict(), os.path.join(ckpt_path, "value.ckpt"))
-    if hasattr(model, "d"):
-        torch.save(model.d.state_dict(),
-                   os.path.join(ckpt_path, "discriminator.ckpt"))
 
 
 if __name__ == "__main__":
@@ -84,10 +86,10 @@ if __name__ == "__main__":
                         help="Type the environment name to run. \
             The possible environments are \
                 [CartPole-v1, Pendulum-v0, BipedalWalker-v3]")
-    parser.add_argument("--visualize",
+    parser.add_argument("--expert",
                         action="store_true",
                         default=False,
                         help="Visualize expert trajectories")
     args = parser.parse_args()
 
-    main(**vars(args))
+    main(args)
