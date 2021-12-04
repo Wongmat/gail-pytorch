@@ -9,6 +9,7 @@ import gym
 from models.nets import Expert
 from models.gail import GAIL
 from models.mg_gail import GAIL as MG_GAIL
+from models.mg_expert import MiniGridExpert
 
 
 def main(args):
@@ -59,12 +60,15 @@ def main(args):
         device = "cpu"
 
     if expert:
-        actor = Expert(state_dim, action_dim, discrete,
-                       **expert_config).to(device)
-        actor.pi.load_state_dict(
-            torch.load(os.path.join(expert_ckpt_path, "policy.ckpt"),
-                       map_location=device))
-        print('Expert agent loaded')
+        if not minigrid:
+            actor = Expert(state_dim, action_dim, discrete,
+                           **expert_config).to(device)
+            actor.pi.load_state_dict(
+                torch.load(os.path.join(expert_ckpt_path, "policy.ckpt"),
+                           map_location=device))
+            print('Expert agent loaded')
+        else:
+            actor = MiniGridExpert(env, env_name, **expert_config).to(device)
 
     elif minigrid:
         actor = MG_GAIL(env.observation_space, env.action_space, env_name,

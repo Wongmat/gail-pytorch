@@ -123,7 +123,6 @@ class GAIL(Module):
                 exp_rwd_iter.append(np.sum(ep_rwds))
 
             ep_obs = FloatTensor(np.array(ep_obs))
-            #ep_obs = np.array(ep_obs)
             ep_rwds = FloatTensor(ep_rwds)
 
         exp_rwd_mean = np.mean(exp_rwd_iter)
