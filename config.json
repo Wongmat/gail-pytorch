@@ -36,8 +36,8 @@
         "normalize_advantage": true
     },
     "MiniGrid-DoorKey-5x5-v0": {
-        "num_iters": 50,
-        "num_steps_per_iter": 5000,
+        "num_iters": 200,
+        "num_steps_per_iter": 10000,
         "horizon": null,
         "lambda": 1e-3,
         "gae_gamma": 0.99,

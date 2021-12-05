@@ -24,7 +24,7 @@ class MiniGridExpert(Module):
                                  model_dir,
                                  argmax=True,
                                  use_memory=False,
-                                 use_text=False)
+                                 use_text=True)
         print("Expert minigrid agent loaded\n")
 
     def act(self, state):
