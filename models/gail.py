@@ -194,8 +194,6 @@ class GAIL(Module):
                 gms.append(ep_gms)
 
             rwd_iter_means.append(np.mean(rwd_iter))
-            print("Iterations: {},   Reward Mean: {}".format(
-                i + 1, np.mean(rwd_iter)))
 
             obs = FloatTensor(np.array(obs))
             acts = FloatTensor(np.array(acts))
@@ -223,6 +221,9 @@ class GAIL(Module):
             self.v.train()
             old_params = get_flat_params(self.v).detach()
             old_v = self.v(obs).detach()
+
+            print("Iterations: {},   Reward Mean: {}, D-Loss: {}".format(
+                i + 1, np.mean(rwd_iter), loss))
 
             def constraint():
                 return ((old_v - self.v(obs))**2).mean()
