@@ -3,8 +3,12 @@ import torch
 
 
 def get_flat_grads(f, net):
+    # flat_grads = []
+    # for grad in torch.autograd.grad(f, net.parameters(), create_graph=True):
+    #     reshaped_grad = grad.reshape(-1)
+    #     flat_grads.append(reshaped_grad)
     flat_grads = torch.cat([
-        grad.view(-1)
+        grad.reshape(-1)
         for grad in torch.autograd.grad(f, net.parameters(), create_graph=True)
     ])
 
@@ -12,7 +16,8 @@ def get_flat_grads(f, net):
 
 
 def get_flat_params(net):
-    return torch.cat([param.view(-1) for param in net.parameters()])
+    # return torch.cat([param.view(-1) for param in net.parameters()])
+    return torch.cat([param.reshape(-1) for param in net.parameters()])
 
 
 def set_params(net, new_flat_params):

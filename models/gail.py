@@ -2,6 +2,7 @@ import numpy as np
 import torch
 
 from torch.nn import Module
+from torch.utils.tensorboard import SummaryWriter
 
 from models.nets import PolicyNetwork, ValueNetwork, Discriminator
 from utils.funcs import get_flat_grads, get_flat_params, set_params, \
@@ -19,6 +20,7 @@ class GAIL(Module):
                  state_dim,
                  action_dim,
                  discrete,
+                 log_dir,
                  train_config=None) -> None:
         super().__init__()
 
@@ -31,6 +33,7 @@ class GAIL(Module):
         self.v = ValueNetwork(self.state_dim)
 
         self.d = Discriminator(self.state_dim, self.action_dim, self.discrete)
+        self.writer = SummaryWriter(log_dir)
 
     def get_networks(self):
         return [self.pi, self.v]
@@ -218,12 +221,21 @@ class GAIL(Module):
             loss.backward()
             opt_d.step()
 
+            exp_probs = self.d(exp_obs, exp_acts)
+            exp_acc = (exp_probs >= 0.5).sum() / exp_probs.shape[0]
+            pred_probs = self.d(obs, acts)
+            pred_acc = (pred_probs <= 0.5).sum() / pred_probs.shape[0]
+            self.writer.add_scalar("avg reward", np.mean(rwd_iter), i)
+            self.writer.add_scalar("disc_loss", loss, i)
+            self.writer.add_scalar("disc expert accuracy", exp_acc, i)
+            self.writer.add_scalar("disc pred accuracy", pred_acc, i)
+
             self.v.train()
             old_params = get_flat_params(self.v).detach()
             old_v = self.v(obs).detach()
 
-            print("Iterations: {},   Reward Mean: {}, D-Loss: {}".format(
-                i + 1, np.mean(rwd_iter), loss))
+            print("Iterations: {},   Reward Mean: {:.3f}, D-Loss: {:.6f}, disc expert acc: {:.3f}, disc pred acc: {:.3f}".format(
+                i + 1, np.mean(rwd_iter), loss, exp_acc, pred_acc))
 
             def constraint():
                 return ((old_v - self.v(obs))**2).mean()

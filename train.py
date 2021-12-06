@@ -1,4 +1,5 @@
 import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 import json
 import pickle
 import argparse
@@ -9,11 +10,10 @@ import gym
 from models.nets import Expert
 from models.gail import GAIL
 
-
-def main(env_name, visualize):
+def main(env_name, visualize, save_name):
     ckpt_path = "ckpts"
     if not os.path.isdir(ckpt_path):
-        os.mkdir(ckpt_path)
+        os.makedirs(ckpt_path)
 
     if env_name not in [
             "MiniGrid-DoorKey-5x5-v0", "CartPole-v1", "Pendulum-v0",
@@ -28,9 +28,10 @@ def main(env_name, visualize):
     with open(os.path.join(expert_ckpt_path, "model_config.json")) as f:
         expert_config = json.load(f)
 
-    ckpt_path = os.path.join(ckpt_path, env_name)
+    # ckpt_path = os.path.join(ckpt_path, env_name)
+    ckpt_path = os.path.join(ckpt_path, env_name, args.save_name)
     if not os.path.isdir(ckpt_path):
-        os.mkdir(ckpt_path)
+        os.makedirs(ckpt_path)
 
     with open("config.json") as f:
         config = json.load(f)[env_name]
@@ -60,7 +61,9 @@ def main(env_name, visualize):
         torch.load(os.path.join(expert_ckpt_path, "policy.ckpt"),
                    map_location=device))
 
-    model = GAIL(state_dim, action_dim, discrete, config).to(device)
+    log_dir = os.path.join(ckpt_path, "log")
+    os.makedirs(log_dir, exist_ok=True)
+    model = GAIL(state_dim, action_dim, discrete, log_dir=log_dir, train_config=config).to(device)
 
     results = model.train(env, expert, render=visualize)
 
@@ -91,6 +94,8 @@ if __name__ == "__main__":
                         action="store_true",
                         default=False,
                         help="Visualize expert trajectories")
+    parser.add_argument("--save_name",
+                        type=str)
     args = parser.parse_args()
 
     main(**vars(args))

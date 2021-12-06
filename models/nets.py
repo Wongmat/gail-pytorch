@@ -1,5 +1,6 @@
 import torch
 
+import torch.nn as nn
 from torch.nn import Module, Sequential, Linear, Tanh, Parameter, Embedding
 from torch.distributions import Categorical, MultivariateNormal
 
@@ -129,3 +130,228 @@ class Expert(Module):
         action = distb.sample().detach().cpu().numpy()
 
         return action
+
+class NatureCNN(Module):
+    def __init__(self, out_dim=256):
+        """
+        Uses same convolutional layers as original NatureCNN from
+        stable_baselines3 library except it doesn't expect constant input shape. Instead, it uses 1x1
+        convolution and global average pooling to keep output shape constant regardless
+        of input shape.
+        """
+        super(NatureCNN, self).__init__()
+        self.out_dim = out_dim
+        self.cnn_feature_extractor = nn.Sequential(
+            nn.Conv2d(3, 32, kernel_size=8, stride=4),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=4, stride=2),
+            nn.ReLU(),
+            nn.Conv2d(64, 64, kernel_size=3, stride=1),
+            nn.ReLU(),
+            nn.Conv2d(64, out_dim, kernel_size=1, stride=1))
+        
+        self.linear = nn.Sequential(
+            nn.Linear(out_dim, out_dim, bias=True),
+            nn.ReLU()
+        )
+    
+    def forward(self, x):
+        # [B, H, W, C]
+        feats = self.cnn_feature_extractor(x)
+        # [B, C]
+        feats = feats.mean(-1).mean(-1)
+        feats = self.linear(feats)
+        return feats
+
+class SimpleCNN(Module):
+    def __init__(self, out_dim=64):
+        super(SimpleCNN, self).__init__()
+        self.out_dim = out_dim
+        self.cnn_feature_extractor = nn.Sequential(
+            nn.Conv2d(3, 32, kernel_size=8, stride=4),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=4, stride=2),
+            nn.ReLU(),
+            nn.Conv2d(64, out_dim, kernel_size=1, stride=1)
+        )
+
+        self.linear = nn.Sequential(
+            nn.Linear(out_dim, out_dim, bias=True),
+            nn.ReLU()
+        )
+    
+    def forward(self, x):
+        # [B, H, W, C]
+        feats = self.cnn_feature_extractor(x)
+        # [B, C]
+        feats = feats.mean(-1).mean(-1)
+        feats = self.linear(feats)
+        return feats
+
+class CNNPolicyNetwork(Module):
+    def __init__(self, action_dim, discrete):
+        super(CNNPolicyNetwork, self).__init__()
+        self.discrete = discrete
+
+        self.action_dim = action_dim
+
+        self.cnn = NatureCNN()
+
+        self.mlp = nn.Sequential(
+            nn.Linear(self.cnn.out_dim, 32, bias=True),
+            nn.ReLU(),
+            nn.Linear(32, 32, bias=True),
+            nn.ReLU(),
+            nn.Linear(32, action_dim, bias=True)
+        )
+
+        if not self.discrete:
+            self.log_std = Parameter(torch.zeros(action_dim))
+    
+    #  if self.discrete:
+    #         probs = torch.softmax(self.net(states), dim=-1)
+    #         distb = Categorical(probs)
+    #     else:
+    #         mean = self.net(states)
+
+    #         std = torch.exp(self.log_std)
+    #         cov_mtx = torch.eye(self.action_dim) * (std**2)
+
+    #         distb = MultivariateNormal(mean, cov_mtx)
+
+    #     return distb
+
+    def forward(self, states):
+        if self.discrete:
+            feats = self.cnn(states)
+            out = self.mlp(feats)
+            probs = torch.softmax(out, dim=-1)
+            distb = Categorical(probs)
+        else:
+            feats = self.cnn(states)
+            mean = self.mlp(feats)
+
+            std = torch.exp(self.log_std)
+            cov_mtx = torch.eye(self.action_dim) * (std**2)
+
+            distb = MultivariateNormal(mean, cov_mtx)
+
+        return distb
+
+class CNNValueNetwork(Module):
+    def __init__(self):
+        super(CNNValueNetwork, self).__init__()
+
+        self.cnn = NatureCNN()
+
+        self.mlp = nn.Sequential(
+            nn.Linear(self.cnn.out_dim, 32, bias=True),
+            nn.ReLU(),
+            nn.Linear(32, 32, bias=True),
+            nn.ReLU(),
+            nn.Linear(32, 1, bias=True)
+        ) 
+    
+    def forward(self, states):
+        feats = self.cnn(states)
+        out = self.mlp(feats)
+        return out
+
+class CNNDiscriminator(Module):
+    def __init__(self, state_dim, action_dim, discrete):
+        super(CNNDiscriminator, self).__init__()
+
+        self.state_dim = state_dim
+        self.action_dim = action_dim
+        self.discrete = discrete
+
+        self.cnn = NatureCNN()
+
+        # if discrete output, learn an embedding to map actions to state dimensionality
+        # could also encode actions using do one-hot encoding, but it's whatever
+        if self.discrete:
+            self.act_emb = Embedding(action_dim, state_dim)
+            self.net_in_dim = self.cnn.out_dim + state_dim
+        else:
+            self.net_in_dim = self.cnn_out_dim + action_dim
+
+
+        self.mlp = nn.Sequential(
+           nn.Linear(self.net_in_dim, 32, bias=True),
+           nn.ReLU(),
+           nn.Linear(32, 32, bias=True),
+           nn.ReLU(),
+           nn.Linear(32, 1, bias=True)
+        )
+
+    def forward(self, states, actions):
+        return torch.sigmoid(self.get_logits(states, actions))
+
+    def get_logits(self, states, actions):
+        feats = self.cnn(states)
+        if self.discrete:
+            actions = self.act_emb(actions.long())
+
+        if len(actions.shape) == 3:
+            actions = actions.squeeze(1)
+        sa = torch.cat([feats, actions], dim=-1)
+
+        return self.mlp(sa)
+
+class SimpleCNNDiscriminator(Module):
+    def __init__(self, state_dim, action_dim, discrete):
+        super(SimpleCNNDiscriminator, self).__init__()
+
+        self.state_dim = state_dim
+        self.action_dim = action_dim
+        self.discrete = discrete
+
+        self.cnn = SimpleCNN()
+
+        # if discrete output, learn an embedding to map actions to state dimensionality
+        # could also encode actions using do one-hot encoding, but it's whatever
+        if self.discrete:
+            self.act_emb = Embedding(action_dim, state_dim)
+            self.net_in_dim = self.cnn.out_dim + state_dim
+        else:
+            self.net_in_dim = self.cnn_out_dim + action_dim
+
+
+        self.mlp = nn.Sequential(
+           nn.Linear(self.net_in_dim, 1, bias=True),
+        )
+
+    def forward(self, states, actions):
+        return torch.sigmoid(self.get_logits(states, actions))
+
+    def get_logits(self, states, actions):
+        feats = self.cnn(states)
+        if self.discrete:
+            actions = self.act_emb(actions.long())
+
+        if len(actions.shape) == 3:
+            actions = actions.squeeze(1)
+        sa = torch.cat([feats, actions], dim=-1)
+
+        return self.mlp(sa)
+
+if __name__ == "__main__":
+    img = torch.rand(4,3,80,80)
+    actions = torch.ones((4))
+    action_dim = 7
+    state_dim = 64
+
+    v_net = CNNValueNetwork() 
+    p_net = CNNPolicyNetwork(action_dim, discrete=True)
+    d_net = CNNDiscriminator(state_dim, action_dim, discrete=True)
+    d_net_simple = SimpleCNNDiscriminator(state_dim, action_dim, discrete=True)
+
+    v_out = v_net(img)
+    p_out = p_net(img)
+    d_out = d_net(img, actions)
+    d_out_simple = d_net_simple(img, actions)
+    import pdb; pdb.set_trace()
+    print("done")
+
+
+

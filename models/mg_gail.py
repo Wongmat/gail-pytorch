@@ -1,11 +1,78 @@
 import numpy as np
+import cv2
+import matplotlib.pyplot as plt
+import os
+
 import torch
 import torch.nn as nn
+from torch.utils.tensorboard import SummaryWriter
 from torch.nn import Module
 from mg_a2c.utils import get_obss_preprocessor, get_vocab
-from models.nets import PolicyNetwork, ValueNetwork, Discriminator
+from models.nets import PolicyNetwork, ValueNetwork, Discriminator, CNNPolicyNetwork, CNNValueNetwork, CNNDiscriminator, SimpleCNNDiscriminator
 from utils.funcs import get_flat_grads, get_flat_params, set_params, \
     conjugate_gradient, rescale_and_linesearch
+
+TILE_SIZE = 32
+DOWNSAMPLE_SIZE = 2 # how many times to downsample image before feeding to CNN
+
+def preprocess_img(img, max_shape, output_shape, color=[147,147,147]):
+    img = img.copy()
+    max_height = max_shape[0]
+    max_width = max_shape[1]
+    output_height = output_shape[0]
+    output_width = output_shape[1]
+    height = img.shape[0]
+    width = img.shape[1]
+    if height > max_height and width > max_width:
+        print("img.shape: ", img.shape)
+        print("max_shape: ", max_shape)
+        img = cv2.resize(img, (max_width, max_height))
+    
+    elif height > max_height and width <= max_width:
+        print("img.shape: ", img.shape)
+        print("max_shape: ", max_shape)
+        img = cv2.resize(img, (width, max_height))
+        width_diff = max_width - width
+        left = np.floor(width_diff/2)
+        right = np.ceil(width_diff/2)
+        img = cv2.copyMakeBorder(img, 0, 0, int(left), int(right), cv2.BORDER_CONSTANT, value=color)
+        
+    elif height <= max_height and width > max_width:
+        print("img.shape: ", img.shape)
+        print("max_shape: ", max_shape)
+        img = cv2.resize(img, (max_width, height))
+        height_diff = max_height - height
+        bottom = np.floor(height_diff/2)
+        top = np.ceil(height_diff/2)
+        img = cv2.copyMakeBorder(img, int(top), int(bottom), 0, 0, cv2.BORDER_CONSTANT, value=color)
+    
+    else:
+        width_diff = max_width - width
+        left = np.floor(width_diff/2)
+        right = np.ceil(width_diff/2)
+        height_diff = max_height - height
+        bottom = np.floor(height_diff/2)
+        top = np.ceil(height_diff/2)
+        img = cv2.copyMakeBorder(img, int(top), int(bottom), int(left), int(right), cv2.BORDER_CONSTANT, value=color)
+
+    img = cv2.resize(img, (output_width, output_height))
+    img = img.transpose(2,0,1)
+    
+    return img
+
+def reset(env):
+    ob = env.reset()
+    full_img, observable_img = env.render('rgb_array', tile_size=TILE_SIZE)
+    ob['full_res_observable_img'] = preprocess_img(observable_img, (env.height * TILE_SIZE, env.width * TILE_SIZE), (env.height * TILE_SIZE // DOWNSAMPLE_SIZE, env.width * TILE_SIZE // DOWNSAMPLE_SIZE))
+    return ob
+
+def step(env, act):
+    ob, rwd, done, info = env.step(act) 
+    full_img, observable_img = env.render('rgb_array', tile_size=TILE_SIZE)
+    ob['full_res_observable_img'] = preprocess_img(observable_img, (env.height * TILE_SIZE, env.width * TILE_SIZE), (env.height * TILE_SIZE // DOWNSAMPLE_SIZE, env.width * TILE_SIZE // DOWNSAMPLE_SIZE))
+    return ob, rwd, done, info
+
+
 
 if torch.cuda.is_available():
     from torch.cuda import FloatTensor
@@ -20,9 +87,11 @@ class GAIL(Module):
                  action_space,
                  model_dir,
                  discrete,
+                 log_dir,
                  train_config=None) -> None:
         super().__init__()
 
+        os.environ["CUDA_VISIBLE_DEVICES"] = "2"
         obs_space, self.preprocess_obss = get_obss_preprocessor(obs_space)
         n = obs_space["image"][0]
         m = obs_space["image"][1]
@@ -32,15 +101,31 @@ class GAIL(Module):
         self.action_dim = action_space.n
         self.discrete = discrete
         self.train_config = train_config
-        self.image_conv = nn.Sequential(nn.Conv2d(3, 16, (2, 2)), nn.ReLU(),
-                                        nn.MaxPool2d((2, 2)),
-                                        nn.Conv2d(16, 32, (2, 2)), nn.ReLU(),
-                                        nn.Conv2d(32, 64, (2, 2)), nn.ReLU())
+        self.writer = SummaryWriter(log_dir)
+        self.ckpt_path = os.path.abspath(os.path.join(log_dir, os.pardir))
+        self.ckpt_path = os.path.join(self.ckpt_path, "models")
+        os.makedirs(self.ckpt_path)
 
-        self.pi = PolicyNetwork(self.state_dim, self.action_dim, self.discrete)
-        self.v = ValueNetwork(self.state_dim)
+        # self.image_conv = nn.Sequential(nn.Conv2d(3, 16, (2, 2)), nn.ReLU(),
+        #                                 nn.MaxPool2d((2, 2)),
+        #                                 nn.Conv2d(16, 32, (2, 2)), nn.ReLU(),
+        #                                 nn.Conv2d(32, 64, (2, 2)), nn.ReLU())
 
-        self.d = Discriminator(self.state_dim, self.action_dim, self.discrete)
+        # self.pi = PolicyNetwork(self.state_dim, self.action_dim, self.discrete)
+        # self.v = ValueNetwork(self.state_dim)
+
+        # self.d = Discriminator(self.state_dim, self.action_dim, self.discrete)
+
+        self.pi = CNNPolicyNetwork(self.action_dim, self.discrete)
+        self.v = CNNValueNetwork()
+        if self.train_config["discrim_net"] == "SimpleCNN":
+            print("Using SimpleCNN for Discriminator")
+            self.d = SimpleCNNDiscriminator(self.state_dim, self.action_dim, self.discrete)
+        elif self.train_config["discrim_net"] == "NatureCNN":
+            print("Using NatureCNN for Discriminator")
+            self.d = CNNDiscriminator(self.state_dim, self.action_dim, self.discrete)
+        else:
+            raise RunTimeError("not implemented: ", self.train_config["discrim_net"])
 
         if hasattr(self.preprocess_obss, "vocab"):
             self.preprocess_obss.vocab.load_vocab(get_vocab(model_dir))
@@ -48,23 +133,27 @@ class GAIL(Module):
     def get_networks(self):
         return [self.pi, self.v]
 
-    def embed(self, state):
-        preprocessed_state = self.preprocess_obss(state)
-        x = preprocessed_state.image.transpose(1, 3).transpose(2, 3)
-        x = self.image_conv(x)
-        state = x.reshape(x.shape[0], -1)
-        return state
+    # def embed(self, state):
+    #     preprocessed_state = self.preprocess_obss(state)
+    #     x = preprocessed_state.image.transpose(1, 3).transpose(2, 3)
+    #     x = self.image_conv(x)
+    #     state = x.reshape(x.shape[0], -1)
+    #     return state
 
     def act(self, state):
-        if type(state) is not list:
-            state = [state]
-        state = self.embed(state)
+        # if type(state) is not list:
+        #     state = [state]
+        # state = self.embed(state)
         self.pi.eval()
 
         state = FloatTensor(state)
         distb = self.pi(state)
 
-        action = distb.sample().detach().cpu().numpy()
+        try:
+            action = distb.sample().cpu().numpy()
+        except:
+            import pdb; pdb.set_trace()
+            print("hi")
 
         return action
 
@@ -80,7 +169,7 @@ class GAIL(Module):
         cg_damping = self.train_config["cg_damping"]
         normalize_advantage = self.train_config["normalize_advantage"]
 
-        opt_d = torch.optim.Adam(self.d.parameters())
+        opt_d = torch.optim.Adam(self.d.parameters(), lr=self.train_config["discrim_lr"])
 
         exp_rwd_iter = []
 
@@ -94,20 +183,29 @@ class GAIL(Module):
 
             t = 0
             done = False
-
-            ob = env.reset()
+            # ob = env.reset()
+            # full_img, observable_img = env.render('rgb_array', tile_size=TILE_SIZE)
+            # ob['full_res_observable_img'] = observable_img
+            ob = reset(env)
 
             while not done and steps < num_steps_per_iter:
                 act = expert.act(ob)
-                with torch.no_grad():
-                    emb_ob = np.array(self.embed([ob])[0], dtype=np.float)
-                ep_obs.append(emb_ob)
-                exp_obs.append(emb_ob)
+                #act = np.ones_like(act)
+
+                # with torch.no_grad():
+                #     #emb_ob = np.array(self.embed([ob])[0], dtype=np.float)
+                #     emb_ob = self.embed([ob])[0].cpu().numpy()
+                # ep_obs.append(emb_ob)
+                # exp_obs.append(emb_ob)
+
+                ep_obs.append(ob['full_res_observable_img'])
+                exp_obs.append(ob['full_res_observable_img'])
                 exp_acts.append(act)
 
                 # if render:
                 #     env.render()
-                ob, rwd, done, info = env.step(act)
+                # ob, rwd, done, info = env.step(act)
+                ob, rwd, done, info = step(env, act)
 
                 ep_rwds.append(rwd)
 
@@ -121,7 +219,6 @@ class GAIL(Module):
 
             if done:
                 exp_rwd_iter.append(np.sum(ep_rwds))
-
             ep_obs = FloatTensor(np.array(ep_obs))
             ep_rwds = FloatTensor(ep_rwds)
 
@@ -154,23 +251,30 @@ class GAIL(Module):
 
                 t = 0
                 done = False
-
-                ob = env.reset()
+                # ob = env.reset()
+                ob = reset(env)
 
                 while not done and steps < num_steps_per_iter:
-                    act = self.act([ob])[0]
+                    img = ob['full_res_observable_img']
+                    img = np.expand_dims(img, 0)
+                    act = self.act(img)[0]
 
-                    with torch.no_grad():
-                        emb_ob = np.array(self.embed([ob])[0], dtype=np.float)
-                    ep_obs.append(emb_ob)
-                    obs.append(emb_ob)
+                    # with torch.no_grad():
+                    #     #emb_ob = np.array(self.embed([ob])[0], dtype=np.float)
+                    #     emb_ob = self.embed([ob])[0].cpu().numpy()
+                    # ep_obs.append(emb_ob)
+                    # obs.append(emb_ob)
+
+                    ep_obs.append(ob['full_res_observable_img'])
+                    obs.append(ob['full_res_observable_img'])
 
                     ep_acts.append(act)
                     acts.append(act)
 
                     if render:
                         env.render()
-                    ob, rwd, done, info = env.step(act)
+                    # ob, rwd, done, info = env.step(act)
+                    ob, rwd, done, info = step(env, act)
 
                     ep_rwds.append(rwd)
                     ep_gms.append(gae_gamma**t)
@@ -193,7 +297,6 @@ class GAIL(Module):
                 # ep_disc_rwds = FloatTensor(ep_disc_rwds)
                 ep_gms = FloatTensor(ep_gms)
                 ep_lmbs = FloatTensor(ep_lmbs)
-
                 ep_costs = (-1) * torch.log(self.d(ep_obs, ep_acts))\
                     .squeeze().detach()
                 ep_disc_costs = ep_gms * ep_costs
@@ -245,12 +348,21 @@ class GAIL(Module):
             loss.backward()
             opt_d.step()
 
+            exp_probs = self.d(exp_obs, exp_acts)
+            exp_acc = (exp_probs >= 0.5).sum() / exp_probs.shape[0]
+            pred_probs = self.d(obs, acts)
+            pred_acc = (pred_probs <= 0.5).sum() / pred_probs.shape[0]
+            self.writer.add_scalar("avg reward", np.mean(rwd_iter), i)
+            self.writer.add_scalar("disc_loss", loss, i)
+            self.writer.add_scalar("disc expert accuracy", exp_acc, i)
+            self.writer.add_scalar("disc pred accuracy", pred_acc, i)  
+
             self.v.train()
             old_params = get_flat_params(self.v).detach()
             old_v = self.v(obs).detach()
 
-            print("Iterations: {},   Reward Mean: {}, D-Loss: {}".format(
-                i + 1, np.mean(rwd_iter), loss))
+            print("Iterations: {},   Reward Mean: {:.3f}, D-Loss: {:.6f}, disc expert acc: {:.3f}, disc pred acc: {:.3f}".format(
+                i + 1, np.mean(rwd_iter), loss, exp_acc, pred_acc))
 
             def constraint():
                 return ((old_v - self.v(obs))**2).mean()
@@ -331,5 +443,12 @@ class GAIL(Module):
             new_params += lambda_ * grad_disc_causal_entropy
 
             set_params(self.pi, new_params)
+
+            if i % self.train_config["log_every"] == 0 and i > 0:
+                torch.save(self.pi.state_dict(), os.path.join(self.ckpt_path,
+                                                        "policy_%d.ckpt" % i))
+                torch.save(self.v.state_dict(), os.path.join(self.ckpt_path, "value_%d.ckpt" % i))
+                torch.save(self.d.state_dict(),
+                        os.path.join(self.ckpt_path, "discriminator_%d.ckpt" % i))
 
         return exp_rwd_mean, rwd_iter_means

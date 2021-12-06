@@ -1,4 +1,5 @@
 import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "4"
 import json
 import pickle
 import argparse
@@ -11,7 +12,11 @@ from models.mg_expert import MiniGridExpert
 from models.mg_gail import GAIL
 
 
-def main(env_name, visualize):
+def main(args):
+    env_name = args.env_name
+    visualize = args.visualize
+    save_name = args.save_name
+
     ckpt_path = "ckpts"
     if not os.path.isdir(ckpt_path):
         os.mkdir(ckpt_path)
@@ -26,7 +31,7 @@ def main(env_name, visualize):
     with open(os.path.join(expert_ckpt_path, "model_config.json")) as f:
         expert_config = json.load(f)
 
-    ckpt_path = os.path.join(ckpt_path, env_name)
+    ckpt_path = os.path.join(ckpt_path, env_name, args.save_name)
     if not os.path.isdir(ckpt_path):
         os.mkdir(ckpt_path)
 
@@ -50,8 +55,10 @@ def main(env_name, visualize):
         device = "cpu"
 
     expert = MiniGridExpert(env, env_name, **expert_config).to(device)
-    model = GAIL(env.observation_space, env.action_space, env_name, discrete,
-                 config).to(device)
+    log_dir = os.path.join(ckpt_path, "log")
+    os.makedirs(log_dir, exist_ok=True)
+    model = GAIL(env.observation_space, env.action_space, env_name, discrete, log_dir=log_dir,
+                 train_config=config).to(device)
 
     results = model.train(env, expert, render=visualize)
 
@@ -82,6 +89,9 @@ if __name__ == "__main__":
                         action="store_true",
                         default=False,
                         help="Visualize expert trajectories")
+    parser.add_argument("--save_name",
+                        type=str,
+                        required=True)
     args = parser.parse_args()
 
-    main(**vars(args))
+    main(args)

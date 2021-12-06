@@ -46,7 +46,7 @@ def main(args):
     env = gym.make(env_name)
     obs = env.reset()
 
-    state_dim = len(env.observation_space.high) if not minigrid else 0
+    #state_dim = len(env.observation_space.high) if not minigrid else 0
     if env_name in ["CartPole-v1", "MiniGrid-DoorKey-5x5-v0"]:
         discrete = True
         action_dim = env.action_space.n
@@ -86,8 +86,9 @@ def main(args):
         print('Trained agent loaded')
 
     for _ in range(1000):
-        env.render()
+        #env.render()
         action = actor.act(obs)
+        print("action: ", action)
         obs, _, done, _ = env.step(action)
         if done:
             obs = env.reset()
