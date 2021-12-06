@@ -60,24 +60,28 @@ def rescale_and_linesearch(
 
     beta = torch.sqrt((2 * max_kl) / torch.dot(s, Hs))
 
-    for _ in range(max_iter):
-        new_params = old_params + beta * s
+    try:
+        for _ in range(max_iter):
+            new_params = old_params + beta * s
 
-        set_params(pi, new_params)
-        kld_new = kld().detach()
+            set_params(pi, new_params)
+            kld_new = kld().detach()
 
-        L_new = L().detach()
+            L_new = L().detach()
 
-        actual_improv = L_new - L_old
-        approx_improv = torch.dot(g, beta * s)
-        ratio = actual_improv / approx_improv
+            actual_improv = L_new - L_old
+            approx_improv = torch.dot(g, beta * s)
+            ratio = actual_improv / approx_improv
 
-        if ratio > success_ratio \
-            and actual_improv > 0 \
-                and kld_new < max_kl:
-            return new_params
+            if ratio > success_ratio \
+                and actual_improv > 0 \
+                    and kld_new < max_kl:
+                return new_params
 
-        beta *= 0.5
+            beta *= 0.5
+        print("The line search was failed!")
+        return old_params
+    except:
+        print("The line search was failed!")
+        return old_params
 
-    print("The line search was failed!")
-    return old_params

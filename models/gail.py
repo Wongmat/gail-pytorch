@@ -222,9 +222,9 @@ class GAIL(Module):
             opt_d.step()
 
             exp_probs = self.d(exp_obs, exp_acts)
-            exp_acc = (exp_probs >= 0.5).sum() / exp_probs.shape[0]
+            exp_acc = (exp_probs <= 0.5).sum() / exp_probs.shape[0]
             pred_probs = self.d(obs, acts)
-            pred_acc = (pred_probs <= 0.5).sum() / pred_probs.shape[0]
+            pred_acc = (pred_probs >= 0.5).sum() / pred_probs.shape[0]
             self.writer.add_scalar("avg reward", np.mean(rwd_iter), i)
             self.writer.add_scalar("disc_loss", loss, i)
             self.writer.add_scalar("disc expert accuracy", exp_acc, i)

@@ -27,7 +27,6 @@ def main(args):
 
     expert_ckpt_path = "experts"
     expert_ckpt_path = os.path.join(expert_ckpt_path, env_name)
-
     with open(os.path.join(expert_ckpt_path, "model_config.json")) as f:
         expert_config = json.load(f)
 
@@ -35,7 +34,8 @@ def main(args):
     if not os.path.isdir(ckpt_path):
         os.mkdir(ckpt_path)
 
-    with open("config.json") as f:
+    config_path = os.path.join("config.json")
+    with open(config_path) as f:
         config = json.load(f)[env_name]
 
     with open(os.path.join(ckpt_path, "model_config.json"), "w") as f:

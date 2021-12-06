@@ -132,7 +132,7 @@ class Expert(Module):
         return action
 
 class NatureCNN(Module):
-    def __init__(self, out_dim=256):
+    def __init__(self, out_dim=64):
         """
         Uses same convolutional layers as original NatureCNN from
         stable_baselines3 library except it doesn't expect constant input shape. Instead, it uses 1x1
@@ -142,13 +142,19 @@ class NatureCNN(Module):
         super(NatureCNN, self).__init__()
         self.out_dim = out_dim
         self.cnn_feature_extractor = nn.Sequential(
-            nn.Conv2d(3, 32, kernel_size=8, stride=4),
+            nn.Conv2d(3, 16, kernel_size=8, stride=4),
+            nn.BatchNorm2d(16),
             nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=4, stride=2),
+            nn.Conv2d(16, 16, kernel_size=4, stride=2),
+            nn.BatchNorm2d(16),
             nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=3, stride=1),
+            nn.Conv2d(16, 32, kernel_size=3, stride=1),
+            nn.BatchNorm2d(32),
             nn.ReLU(),
-            nn.Conv2d(64, out_dim, kernel_size=1, stride=1))
+            nn.Conv2d(32, out_dim, kernel_size=1, stride=1),
+            nn.BatchNorm2d(out_dim),
+            nn.ReLU()
+        )
         
         self.linear = nn.Sequential(
             nn.Linear(out_dim, out_dim, bias=True),
@@ -168,11 +174,12 @@ class SimpleCNN(Module):
         super(SimpleCNN, self).__init__()
         self.out_dim = out_dim
         self.cnn_feature_extractor = nn.Sequential(
-            nn.Conv2d(3, 32, kernel_size=8, stride=4),
+            nn.Conv2d(3, 16, kernel_size=8, stride=4),
             nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=4, stride=2),
+            nn.Conv2d(16, 32, kernel_size=4, stride=2),
             nn.ReLU(),
-            nn.Conv2d(64, out_dim, kernel_size=1, stride=1)
+            nn.Conv2d(32, out_dim, kernel_size=1, stride=1),
+            nn.ReLU()
         )
 
         self.linear = nn.Sequential(
@@ -187,6 +194,9 @@ class SimpleCNN(Module):
         feats = feats.mean(-1).mean(-1)
         feats = self.linear(feats)
         return feats
+
+
+
 
 class CNNPolicyNetwork(Module):
     def __init__(self, action_dim, discrete):
@@ -226,7 +236,12 @@ class CNNPolicyNetwork(Module):
             feats = self.cnn(states)
             out = self.mlp(feats)
             probs = torch.softmax(out, dim=-1)
+            # if torch.isnan(probs).any():
+            #     import pdb; pdb.set_trace()
+            #     print("isnan")
+            # probs[probs < 0.0] = 0.0
             distb = Categorical(probs)
+
         else:
             feats = self.cnn(states)
             mean = self.mlp(feats)
@@ -335,6 +350,81 @@ class SimpleCNNDiscriminator(Module):
 
         return self.mlp(sa)
 
+class SimplestCNNDiscriminator(Module):
+    def __init__(self, state_dim, action_dim, discrete, out_dim=16):
+        super(SimplestCNNDiscriminator, self).__init__()
+        self.out_dim = out_dim
+        self.discrete = discrete
+        self.cnn_feature_extractor=nn.Sequential(
+            nn.Conv2d(3, 16, kernel_size=8, stride=4),
+            nn.ReLU(),
+            nn.Conv2d(16, out_dim, kernel_size=1, stride=1)
+        )
+
+        # if discrete output, learn an embedding to map actions to state dimensionality
+        # could also encode actions using do one-hot encoding, but it's whatever
+        if self.discrete:
+            self.act_emb = Embedding(action_dim, state_dim)
+            self.net_in_dim = self.out_dim + state_dim
+        else:
+            self.net_in_dim = self.out_dim + action_dim
+
+        self.mlp = nn.Sequential(
+            nn.Linear(self.net_in_dim, 1, bias=True)
+        )
+
+    def forward(self, states, actions):
+        return torch.sigmoid(self.get_logits(states, actions))
+
+    def get_logits(self, states, actions):
+        feats = self.cnn_feature_extractor(states)
+        feats = feats.mean(-1).mean(-1)
+        if self.discrete:
+            actions = self.act_emb(actions.long())
+        if len(actions.shape) == 3:
+            actions = actions.squeeze(1)
+        sa = torch.cat([feats, actions], dim=-1)
+
+        return self.mlp(sa)
+
+class SimplestCNNDiscriminatorV2(Module):
+    def __init__(self, state_dim, action_dim, out_dim=8):
+        super(SimpleCNN, self).__init__()
+        self.out_dim = out_dim
+        self.cnn_feature_extractor=nn.Sequential(
+            nn.Conv2d(3, 8, kernel_size=8, stride=4),
+            nn.ReLU(),
+            nn.Conv2d(8, out_dim, kernel_size=1, stride=1),
+        )
+
+        # if discrete output, learn an embedding to map actions to state dimensionality
+        # could also encode actions using do one-hot encoding, but it's whatever
+        if self.discrete:
+            self.act_emb = Embedding(action_dim, action_dim)
+            self.net_in_dim = self.cnn.out_dim + action_dim
+        else:
+            self.net_in_dim = self.cnn_out_dim + action_dim
+
+        self.mlp = nn.Sequential(
+            nn.Linear(self.net_in_dim, 1, bias=True)
+        )
+
+        def forward(self, x):
+            feats = self.cnn_feature_extractor(x)
+            feats = feats.mean(-1).mean(-1)
+            return torch.sigmoid(self.get_logits(feats))
+
+        def get_logits(self, states, actions):
+            feats = self.cnn_feature_extractor(states)
+            if self.discrete:
+                actions = self.act_emb(actions.long())
+            if len(actions.shape) == 3:
+                actions = actions.squeeze(1)
+            sa = torch.cat([feats, actions], dim=-1)
+
+            return self.mlp(sa)
+
+
 if __name__ == "__main__":
     img = torch.rand(4,3,80,80)
     actions = torch.ones((4))
@@ -347,6 +437,7 @@ if __name__ == "__main__":
     d_net_simple = SimpleCNNDiscriminator(state_dim, action_dim, discrete=True)
 
     v_out = v_net(img)
+    import pdb; pdb.set_trace()
     p_out = p_net(img)
     d_out = d_net(img, actions)
     d_out_simple = d_net_simple(img, actions)

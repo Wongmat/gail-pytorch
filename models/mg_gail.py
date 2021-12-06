@@ -8,69 +8,16 @@ import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
 from torch.nn import Module
 from mg_a2c.utils import get_obss_preprocessor, get_vocab
-from models.nets import PolicyNetwork, ValueNetwork, Discriminator, CNNPolicyNetwork, CNNValueNetwork, CNNDiscriminator, SimpleCNNDiscriminator
+from models.nets import PolicyNetwork, ValueNetwork, Discriminator, CNNPolicyNetwork, CNNValueNetwork, CNNDiscriminator, SimpleCNNDiscriminator, SimplestCNNDiscriminator
 from utils.funcs import get_flat_grads, get_flat_params, set_params, \
     conjugate_gradient, rescale_and_linesearch
+from utils.state_handler import reset, step, preprocess_img
 
-TILE_SIZE = 32
-DOWNSAMPLE_SIZE = 2 # how many times to downsample image before feeding to CNN
 
-def preprocess_img(img, max_shape, output_shape, color=[147,147,147]):
-    img = img.copy()
-    max_height = max_shape[0]
-    max_width = max_shape[1]
-    output_height = output_shape[0]
-    output_width = output_shape[1]
-    height = img.shape[0]
-    width = img.shape[1]
-    if height > max_height and width > max_width:
-        print("img.shape: ", img.shape)
-        print("max_shape: ", max_shape)
-        img = cv2.resize(img, (max_width, max_height))
-    
-    elif height > max_height and width <= max_width:
-        print("img.shape: ", img.shape)
-        print("max_shape: ", max_shape)
-        img = cv2.resize(img, (width, max_height))
-        width_diff = max_width - width
-        left = np.floor(width_diff/2)
-        right = np.ceil(width_diff/2)
-        img = cv2.copyMakeBorder(img, 0, 0, int(left), int(right), cv2.BORDER_CONSTANT, value=color)
-        
-    elif height <= max_height and width > max_width:
-        print("img.shape: ", img.shape)
-        print("max_shape: ", max_shape)
-        img = cv2.resize(img, (max_width, height))
-        height_diff = max_height - height
-        bottom = np.floor(height_diff/2)
-        top = np.ceil(height_diff/2)
-        img = cv2.copyMakeBorder(img, int(top), int(bottom), 0, 0, cv2.BORDER_CONSTANT, value=color)
-    
-    else:
-        width_diff = max_width - width
-        left = np.floor(width_diff/2)
-        right = np.ceil(width_diff/2)
-        height_diff = max_height - height
-        bottom = np.floor(height_diff/2)
-        top = np.ceil(height_diff/2)
-        img = cv2.copyMakeBorder(img, int(top), int(bottom), int(left), int(right), cv2.BORDER_CONSTANT, value=color)
 
-    img = cv2.resize(img, (output_width, output_height))
-    img = img.transpose(2,0,1)
-    
-    return img
 
-def reset(env):
-    ob = env.reset()
-    full_img, observable_img = env.render('rgb_array', tile_size=TILE_SIZE)
-    ob['full_res_observable_img'] = preprocess_img(observable_img, (env.height * TILE_SIZE, env.width * TILE_SIZE), (env.height * TILE_SIZE // DOWNSAMPLE_SIZE, env.width * TILE_SIZE // DOWNSAMPLE_SIZE))
-    return ob
 
-def step(env, act):
-    ob, rwd, done, info = env.step(act) 
-    full_img, observable_img = env.render('rgb_array', tile_size=TILE_SIZE)
-    ob['full_res_observable_img'] = preprocess_img(observable_img, (env.height * TILE_SIZE, env.width * TILE_SIZE), (env.height * TILE_SIZE // DOWNSAMPLE_SIZE, env.width * TILE_SIZE // DOWNSAMPLE_SIZE))
-    return ob, rwd, done, info
+
 
 
 
@@ -91,7 +38,6 @@ class GAIL(Module):
                  train_config=None) -> None:
         super().__init__()
 
-        os.environ["CUDA_VISIBLE_DEVICES"] = "2"
         obs_space, self.preprocess_obss = get_obss_preprocessor(obs_space)
         n = obs_space["image"][0]
         m = obs_space["image"][1]
@@ -101,10 +47,8 @@ class GAIL(Module):
         self.action_dim = action_space.n
         self.discrete = discrete
         self.train_config = train_config
-        self.writer = SummaryWriter(log_dir)
-        self.ckpt_path = os.path.abspath(os.path.join(log_dir, os.pardir))
-        self.ckpt_path = os.path.join(self.ckpt_path, "models")
-        os.makedirs(self.ckpt_path)
+        self.log_dir = log_dir
+       
 
         # self.image_conv = nn.Sequential(nn.Conv2d(3, 16, (2, 2)), nn.ReLU(),
         #                                 nn.MaxPool2d((2, 2)),
@@ -124,6 +68,9 @@ class GAIL(Module):
         elif self.train_config["discrim_net"] == "NatureCNN":
             print("Using NatureCNN for Discriminator")
             self.d = CNNDiscriminator(self.state_dim, self.action_dim, self.discrete)
+        elif self.train_config["discrim_net"] == "SimplestCNN":
+            print("Using SimplestCNN for Discriminator")
+            self.d = SimplestCNNDiscriminator(self.action_dim, self.action_dim, self.discrete)
         else:
             raise RunTimeError("not implemented: ", self.train_config["discrim_net"])
 
@@ -150,7 +97,8 @@ class GAIL(Module):
         distb = self.pi(state)
 
         try:
-            action = distb.sample().cpu().numpy()
+            # action = distb.sample().cpu().numpy()
+            action = [distb.probs.argmax().cpu().numpy()]
         except:
             import pdb; pdb.set_trace()
             print("hi")
@@ -158,6 +106,12 @@ class GAIL(Module):
         return action
 
     def train(self, env, expert, render=False):
+
+        self.writer = SummaryWriter(self.log_dir)
+        self.ckpt_path = os.path.abspath(os.path.join(self.log_dir, os.pardir))
+        self.ckpt_path = os.path.join(self.ckpt_path, "models")
+        os.makedirs(self.ckpt_path, exist_ok=True)
+
         num_iters = self.train_config["num_iters"]
         num_steps_per_iter = self.train_config["num_steps_per_iter"]
         horizon = self.train_config["horizon"]
@@ -349,9 +303,9 @@ class GAIL(Module):
             opt_d.step()
 
             exp_probs = self.d(exp_obs, exp_acts)
-            exp_acc = (exp_probs >= 0.5).sum() / exp_probs.shape[0]
+            exp_acc = (exp_probs <= 0.5).sum() / exp_probs.shape[0]
             pred_probs = self.d(obs, acts)
-            pred_acc = (pred_probs <= 0.5).sum() / pred_probs.shape[0]
+            pred_acc = (pred_probs >= 0.5).sum() / pred_probs.shape[0]
             self.writer.add_scalar("avg reward", np.mean(rwd_iter), i)
             self.writer.add_scalar("disc_loss", loss, i)
             self.writer.add_scalar("disc expert accuracy", exp_acc, i)

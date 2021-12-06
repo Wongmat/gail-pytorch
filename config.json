@@ -46,8 +46,8 @@
         "max_kl": 0.01,
         "cg_damping": 0.1,
         "normalize_advantage": true,
-        "discrim_net": "NatureCNN",
-        "discrim_lr": 1e-4,
+        "discrim_net": "SimplestCNN",
+        "discrim_lr": 1e-3,
         "log_every": 50
 }
 }
